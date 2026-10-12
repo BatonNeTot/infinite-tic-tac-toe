@@ -1,9 +1,9 @@
 ﻿cmake_minimum_required (VERSION 3.11)
-project ("foggy_maze")
+project ("infinite-tic-tac-toe")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(PROJECT_TARGET "foggy_maze")
+set(PROJECT_TARGET "infinite-tic-tac-toe")
 
 ###############################
 
