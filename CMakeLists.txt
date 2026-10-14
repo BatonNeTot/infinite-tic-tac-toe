@@ -41,7 +41,9 @@ endif()
 add_dependencies(${PROJECT_TARGET} raylib)
 
 target_include_directories(${PROJECT_TARGET} PUBLIC "include" "dependencies/raylib/src")
+target_include_directories(${PROJECT_TARGET} PUBLIC "include" "dependencies/nbnet")
+target_include_directories(${PROJECT_TARGET} PUBLIC "include")
 target_include_directories(${PROJECT_TARGET} PRIVATE "src")
 
 target_link_directories(${PROJECT_TARGET} PRIVATE "lib")
-target_link_libraries(${PROJECT_TARGET} ${PROJECT_LIBRARIES} raylib)
+target_link_libraries(${PROJECT_TARGET} ${PROJECT_LIBRARIES} raylib ws2_32)

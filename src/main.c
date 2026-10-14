@@ -5,74 +5,102 @@
 #include <math.h>
 
 #include "raylib.h"
-
-//////////////////////////////////////////////
-
-double clamp(double value, double min, double max) {
-    return value > max ? max : value < min ? min : value; 
-}
-
-#define ARRAY_TYPE(type) Array##type
-#define ARRAY_TYPE_DECLARE(type) \
-typedef struct Array##type {\
-    type *p_data;\
-    int size;\
-    int capacity;\
-} Array##type
-
-#define _GET(index) p_data[(index)]
-
-#define array_push(array, value) \
-do {\
-    if ((array).capacity <= (array).size) {\
-        (array).capacity = (array).capacity == 0 ? 4 : (((array).capacity << 2) + (array).capacity);\
-        (array).p_data = MemRealloc((array).p_data, (array).capacity * sizeof((array).p_data[0]));\
-    }\
-    (array).p_data[(array).size] = (value);\
-    ++(array).size;\
-} while(0)
-
-///////////////////////////////////////
-
-#define CELL_SIZE 125
-
-#define STROKE_WIDTH 5
-
-#define INIT_SCREEN_WIDTH 800
-#define INIT_SCREEN_HEIGHT 600
-
-#define BACKGROUND_COLOR WHITE
-
-static Vector2 view_center = {0, 0};
-static double view_scaling = 1.0;
-
-#define MAX_VIEW_SCALING 2.0
-#define MIN_VIEW_SCALING 0.2
+#include "net.h"
+#include "ui.h"
+#include "common.h"
 
 /////////////////////////////////////
 
-typedef enum CellState {
+typedef enum {
     CELL_EMPTY,
     CELL_CIRCLE,
     CELL_CROSS
 } CellState;
 
+#define CELL_SERVER CELL_CIRCLE
+#define CELL_CLIENT CELL_CROSS
+
 ARRAY_TYPE_DECLARE(CellState);
-typedef struct Row {
+typedef struct {
     ARRAY_TYPE(CellState) positive;
     ARRAY_TYPE(CellState) negative;
 } Row;
 
 ARRAY_TYPE_DECLARE(Row);
-typedef struct Board {
+typedef struct {
     ARRAY_TYPE(Row) positive;
     ARRAY_TYPE(Row) negative;
 } Board;
 
-static Board board = {0};
+typedef enum {
+    GAME_START,
+    GAME_START_FAILED_SERVER,
+    GAME_START_DISCONNECTED,
+    GAME_AWAITING_CONNECTION,
+    GAME_CONNECTING,
+    GAME_CONNECTING_FAILED,
+    GAME_FINISHED_SERVER_WIN,
+    GAME_FINISHED_CLIENT_WIN,
+    GAME_FINISHED_SERVER_LOSE,
+    GAME_FINISHED_CLIENT_LOSE,
+    GAME_RUNNING_SERVER_AWAIT,
+    GAME_RUNNING_CLIENT_AWAIT,
+    GAME_RUNNING_SERVER,
+    GAME_RUNNING_CLIENT,
+    GAME_CAN_MOVE_VIEW = GAME_FINISHED_SERVER_WIN,
+    GAME_CAN_PLACE_MARKER = GAME_RUNNING_SERVER,
+} GameState;
 
-void set_cell_state(int x, int y, CellState state) {
-    fprintf(stderr, "Setting cell state at %d, %d\n", x, y);
+///////////////////////////////////////////
+
+static Board board = {0};
+static GameState game_state = GAME_START;
+
+static Vector2 view_center = {0, 0};
+static double view_scaling = 1.0;
+
+//////////////////////////////////////////
+
+void reset_board(void) {
+    for (int j = 0; j < board.positive.size; ++j) {
+        memset(&board.positive._GET(j).positive._GET(0), CELL_EMPTY, board.positive._GET(j).positive.size * sizeof(board.positive._GET(j).positive._GET(0)));
+        memset(&board.positive._GET(j).negative._GET(0), CELL_EMPTY, board.positive._GET(j).negative.size * sizeof(board.positive._GET(j).positive._GET(0)));
+    }
+    for (int j = 0; j < board.negative.size; ++j) {
+        memset(&board.negative._GET(j).positive._GET(0), CELL_EMPTY, board.negative._GET(j).positive.size * sizeof(board.positive._GET(j).positive._GET(0)));
+        memset(&board.negative._GET(j).negative._GET(0), CELL_EMPTY, board.negative._GET(j).negative.size * sizeof(board.positive._GET(j).positive._GET(0)));
+    }
+}
+
+CellState get_cell_state(int x, int y) {
+    ARRAY_TYPE(Row) *rows;
+    if (y >= 0) {
+        rows = &board.positive;
+    } else {
+        rows = &board.negative;
+        y = -y - 1;
+    }
+
+    if (y >= rows->size) {
+        return CELL_EMPTY;
+    }
+
+    ARRAY_TYPE(CellState) *cells;
+    if (x >= 0) {
+        cells = &rows->_GET(y).positive;
+    } else {
+        cells = &rows->_GET(y).negative;
+        x = -x - 1;
+    }
+
+    if (x >= cells->size) {
+        return CELL_EMPTY;
+    }
+
+    return cells->_GET(x);
+}
+
+bool set_cell_state(int x, int y, CellState state) {
     ARRAY_TYPE(Row) *rows;
     if (y >= 0) {
         rows = &board.positive;
@@ -97,7 +125,12 @@ void set_cell_state(int x, int y, CellState state) {
         array_push(*cells, CELL_EMPTY);
     }
 
+    if (cells->_GET(x) != CELL_EMPTY) {
+        return false;
+    }
+
     cells->_GET(x) = state;
+    return true;
 }
 
 ///////////////////////////////////////////////////////
@@ -169,29 +202,6 @@ Vector2 get_coords_from_mouse() {
 
 ///////////////////////////////////////////////////////
 
-void process_inputs(void) {
-    double wheel_move = GetMouseWheelMove() / 10;
-    view_scaling = clamp(view_scaling - wheel_move, MIN_VIEW_SCALING, MAX_VIEW_SCALING);
-
-    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-        Vector2 delta = GetMouseDelta();
-        view_center.x -= delta.x / view_scaling;
-        view_center.y += delta.y / view_scaling;
-    }
-
-    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-        Vector2 coords = get_coords_from_mouse();
-        set_cell_state((int)coords.x, (int)coords.y, CELL_CIRCLE);
-    }
-}
-
-void draw_text_centered(const char* pText, float positionX, float positionY, float fontSize, Color color) {
-    Font font = GetFontDefault();
-    float spacing = 1;
-    Vector2 textSize = MeasureTextEx(font, pText, fontSize, spacing);
-    DrawTextEx(font, pText, (Vector2){ positionX - textSize.x / 2, positionY - textSize.y / 2 }, fontSize, spacing, color);
-}
-
 void draw_circle(Vector2 coords) {
     Vector2 center = from_world_to_view(get_world_point_from_coords(coords));
     int radius = view_cell_width() / 2 - view_stroke_width() * 2.5f;
@@ -213,7 +223,6 @@ void draw_cross(Vector2 coords) {
 }
 
 void draw_board(void) {
-    fprintf(stderr, "Drawing board\n");
     for (int j = 0; j < board.positive.size; ++j) {
         int y = j;
         for (int i = 0; i < board.positive._GET(j).positive.size; ++i) {
@@ -301,20 +310,420 @@ void draw_grid(void) {
     }
 }
 
+void draw_menu(void) {
+    draw_labels();
+}
+
 void process_drawings(void) {
     ClearBackground(WHITE);
 
     draw_grid();
     draw_board();
+
+    draw_menu();
 }
 
+#define LABEL_TEST_SIZE 45
+
+static int host_server_label;
+static int connect_label;
+static int failed_host_server_label;
+static int disconnected_label;
+
+static int await_connection_label;
+
+static int failed_connecting_label;
+static int connecting_title_label;
+static int ip_address_label;
+#define DEFAULT_IP_ADDRESS_STRING " "
+
+static int win_label;
+static int lose_label;
+
+static void set_game_state_labels_visibility(GameState state, bool visibility) {
+    switch (state) {
+        case GAME_START: 
+            set_label_visibility(host_server_label, visibility);
+            set_label_visibility(connect_label, visibility);
+            break;
+        case GAME_START_FAILED_SERVER:
+            set_label_visibility(host_server_label, visibility);
+            set_label_visibility(connect_label, visibility);
+            set_label_visibility(failed_host_server_label, visibility);
+            break;
+        case GAME_START_DISCONNECTED:
+            set_label_visibility(host_server_label, visibility);
+            set_label_visibility(connect_label, visibility);
+            set_label_visibility(disconnected_label, visibility);
+            break;
+        case GAME_AWAITING_CONNECTION: 
+            set_label_visibility(await_connection_label, visibility);
+            break;
+        case GAME_CONNECTING_FAILED: 
+            set_label_visibility(failed_connecting_label, visibility);
+        case GAME_CONNECTING: 
+            set_label_visibility(connecting_title_label, visibility);
+            set_label_visibility(ip_address_label, visibility);
+            break;
+        case GAME_FINISHED_SERVER_WIN:
+        case GAME_FINISHED_CLIENT_WIN:
+            set_label_visibility(win_label, visibility);
+            break;
+        case GAME_FINISHED_SERVER_LOSE:
+        case GAME_FINISHED_CLIENT_LOSE:
+            set_label_visibility(lose_label, visibility);
+            break;
+        default:
+            break;
+    }
+}
+
+static void set_game_state(GameState state) {
+    fprintf(stderr, "set_game_state %d\n", state);
+    switch (game_state) {
+        case GAME_AWAITING_CONNECTION:
+        case GAME_CONNECTING:
+        case GAME_CONNECTING_FAILED:
+            reset_board();
+            break;
+        default:
+            break;
+    }
+
+    set_game_state_labels_visibility(game_state, false);
+    
+    game_state = state;
+    set_game_state_labels_visibility(state, true);
+    switch (state) {
+        case GAME_CONNECTING:
+            sprintf(get_label_buffer(ip_address_label), DEFAULT_IP_ADDRESS_STRING);
+        case GAME_CONNECTING_FAILED:
+            set_labels_focus(ip_address_label);
+            update_label(ip_address_label);
+            break;
+        default:
+            break;
+    }
+}
+
+static bool check_winning_conditions(Vector2 origin) {
+    int x = (int)origin.x;
+    int y = (int)origin.y;
+
+    CellState target_state = get_cell_state(x, y);
+    assert(target_state != CELL_EMPTY);
+
+    for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+        MessageMove cells[WINNING_STROKE_SIZE];
+        bool found_win_stroke;
+
+        found_win_stroke = true;
+        for (int j = 0; j < WINNING_STROKE_SIZE; ++j) {
+            cells[j].x = x - i + j;
+            cells[j].y = y;
+            if (get_cell_state(cells[j].x, cells[j].y) != target_state) {
+                found_win_stroke = false;
+                break;
+            }
+        }
+        if (found_win_stroke) {
+            send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
+            return true;
+        }
+
+        found_win_stroke = true;
+        for (int j = 0; j < WINNING_STROKE_SIZE; ++j) {
+            cells[j].x = x;
+            cells[j].y = y - i + j;
+            if (get_cell_state(cells[j].x, cells[j].y) != target_state) {
+                found_win_stroke = false;
+                break;
+            }
+        }
+        if (found_win_stroke) {
+            send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
+            return true;
+        }
+
+        found_win_stroke = true;
+        for (int j = 0; j < WINNING_STROKE_SIZE; ++j) {
+            cells[j].x = x - i + j;
+            cells[j].y = y - i + j;
+            if (get_cell_state(cells[j].x, cells[j].y) != target_state) {
+                found_win_stroke = false;
+                break;
+            }
+        }
+        if (found_win_stroke) {
+            send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
+            return true;
+        }
+
+        found_win_stroke = true;
+        for (int j = 0; j < WINNING_STROKE_SIZE; ++j) {
+            cells[j].x = x - i + j;
+            cells[j].y = y - i + (WINNING_STROKE_SIZE - 1 - j);
+            if (get_cell_state(cells[j].x, cells[j].y) != target_state) {
+                found_win_stroke = false;
+                break;
+            }
+        }
+        if (found_win_stroke) {
+            send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void server_on_connect(uint8_t *p_buffer, unsigned int size) {
+    NBN_WriteStream ws;
+    NBN_WriteStream_Init(&ws, p_buffer, size * sizeof(p_buffer[0]));
+
+    // TODO decide who goes first
+    Player first_player = PLAYER_SERVER;
+    NBN_SerializeUInt((NBN_Stream *)&ws, first_player, 0, PLAYER_TOTAL - 1);
+
+    if (first_player == PLAYER_SERVER) {
+        set_game_state(GAME_RUNNING_SERVER);
+    } else {
+        set_game_state(GAME_RUNNING_SERVER_AWAIT);
+    }
+}
+static void server_on_disconnect() {
+    reset_server();
+    set_game_state(GAME_START_DISCONNECTED);
+}
+static void server_on_message() {
+    NBN_MessageInfo msg_info = NBN_GameServer_GetMessageInfo();
+
+    switch (msg_info.type) {
+        case MESSAGE_MOVE_DONE: {
+            assert(game_state == GAME_RUNNING_SERVER_AWAIT);
+            MessageMove* msg = msg_info.data;
+            set_cell_state(msg->x, msg->y, CELL_CLIENT);
+            set_game_state(GAME_RUNNING_SERVER);
+            check_winning_conditions((Vector2){ msg->x, msg->y});
+            break;
+        }
+    }
+}
+
+static void client_on_connect(uint8_t *p_buffer, unsigned int size) {
+    NBN_ReadStream rs;
+    NBN_ReadStream_Init(&rs, p_buffer, size);
+
+    Player first_player;
+    NBN_SerializeUInt((NBN_Stream *)&rs, first_player, 0, PLAYER_TOTAL - 1);
+
+    if (first_player == PLAYER_CLIENT) {
+        set_game_state(GAME_RUNNING_CLIENT);
+    } else {
+        set_game_state(GAME_RUNNING_CLIENT_AWAIT);
+    }
+}
+static void client_on_disconnect() {
+    reset_client();
+    set_game_state(GAME_START_DISCONNECTED);
+}
+static void client_on_message() {
+    assert(game_state == GAME_RUNNING_CLIENT_AWAIT);
+    NBN_MessageInfo msg_info = NBN_GameClient_GetMessageInfo();
+
+    switch (msg_info.type) {
+        case MESSAGE_MOVE_DONE: {
+            MessageMove* msg = msg_info.data;
+            set_cell_state(msg->x, msg->y, CELL_SERVER);
+            set_game_state(GAME_RUNNING_CLIENT);
+            break;
+        }
+        case MESSAGE_GAME_END: {
+            MessageGameEnd* msg = msg_info.data;
+            set_game_state(msg->player == PLAYER_CLIENT ? GAME_FINISHED_CLIENT_WIN : GAME_FINISHED_CLIENT_LOSE);
+        }
+    }
+}
+
+static void label_callbacks(int id) {
+    if (id == host_server_label) {
+        set_game_state(GAME_AWAITING_CONNECTION);
+        if (!init_server(&server_on_connect, &server_on_disconnect, &server_on_message)) {
+            set_game_state(GAME_START_FAILED_SERVER);
+        }
+        return;
+    } else if (id == connect_label) {
+        set_game_state(GAME_CONNECTING);
+    }
+}
+
+static void ip_address_label_edit_callback(int id, char key) {
+    char* p_buffer = get_label_buffer(id);
+    int buffer_size = strnlen(p_buffer, LABEL_BUFFER_SIZE);
+    if (buffer_size < LABEL_BUFFER_SIZE) {
+        const char* p_first_space = strchr(p_buffer, ' ');
+        if (p_first_space != NULL) {
+            buffer_size = p_first_space - p_buffer;
+        }
+    }
+    if (key == 0x08) {
+        p_buffer[buffer_size - 1] = buffer_size >= sizeof(DEFAULT_IP_ADDRESS_STRING) ? '\0' : ' ';
+    } else if (key == '\n') {
+        if (!init_client(p_buffer, &client_on_connect, &client_on_disconnect, &client_on_message)) {
+            set_game_state(GAME_CONNECTING_FAILED);
+        } else {
+            set_game_state(GAME_RUNNING_CLIENT_AWAIT);
+        }
+        return;
+    } else {
+        p_buffer[buffer_size] = key;
+        if (buffer_size >= sizeof(DEFAULT_IP_ADDRESS_STRING)) {
+            p_buffer[buffer_size + 1] = '\0';
+        }
+    }
+    update_label(id);
+}
+
+void process_networking(void) {
+    switch (game_state) {
+        case GAME_AWAITING_CONNECTION:
+        case GAME_FINISHED_SERVER_WIN:
+        case GAME_FINISHED_SERVER_LOSE:
+        case GAME_RUNNING_SERVER:
+        case GAME_RUNNING_SERVER_AWAIT:
+            process_server_messages();
+            break;
+        case GAME_FINISHED_CLIENT_WIN:
+        case GAME_FINISHED_CLIENT_LOSE:
+        case GAME_RUNNING_CLIENT:
+        case GAME_RUNNING_CLIENT_AWAIT:
+            process_client_messages();
+            break;
+        default:
+            break;
+    }
+}
+
+void process_inputs(void) {
+    if (game_state >= GAME_CAN_MOVE_VIEW) {
+        double wheel_move = GetMouseWheelMove() / 10;
+        view_scaling = clamp(view_scaling - wheel_move, MIN_VIEW_SCALING, MAX_VIEW_SCALING);
+
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+            Vector2 delta = GetMouseDelta();
+            view_center.x -= delta.x / view_scaling;
+            view_center.y += delta.y / view_scaling;
+        }
+    }
+    if (game_state < GAME_CAN_PLACE_MARKER) {
+        process_labels();
+        return;
+    }
+
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+        Vector2 coords = get_coords_from_mouse();
+        if (game_state == GAME_RUNNING_SERVER && set_cell_state((int)coords.x, (int)coords.y, CELL_SERVER)) {
+            if (!check_winning_conditions(coords)) {
+                send_server_move((int)coords.x, (int)coords.y);
+                set_game_state(GAME_RUNNING_SERVER_AWAIT);
+            }
+        } else if (game_state == GAME_RUNNING_CLIENT && set_cell_state((int)coords.x, (int)coords.y, CELL_CLIENT)) {
+            send_client_move((int)coords.x, (int)coords.y);
+            set_game_state(GAME_RUNNING_CLIENT_AWAIT);
+        }
+    }
+}
+
+static void setup_labels(void) {
+    
+    host_server_label = add_empty_label();
+    sprintf(get_label_buffer(host_server_label), "Host server");
+    set_label_center(host_server_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 - 50});
+    set_label_size(host_server_label, LABEL_TEST_SIZE);
+    set_label_callback(host_server_label, &label_callbacks);
+    update_label(host_server_label);
+    
+    connect_label = add_empty_label();
+    sprintf(get_label_buffer(connect_label), "Connect to...");
+    set_label_center(connect_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 + 50});
+    set_label_size(connect_label, LABEL_TEST_SIZE);
+    set_label_callback(connect_label, &label_callbacks);
+    update_label(connect_label);
+
+    failed_host_server_label = add_empty_label();
+    sprintf(get_label_buffer(failed_host_server_label), "Failed to start a server");
+    set_label_center(failed_host_server_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 - 150});
+    set_label_size(failed_host_server_label, LABEL_TEST_SIZE);
+    update_label(failed_host_server_label);
+
+    disconnected_label = add_empty_label();
+    sprintf(get_label_buffer(disconnected_label), "Disconnected");
+    set_label_center(disconnected_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 - 150});
+    set_label_size(disconnected_label, LABEL_TEST_SIZE);
+    update_label(disconnected_label);
+
+    /////////////////////
+
+    await_connection_label = add_empty_label();
+    sprintf(get_label_buffer(await_connection_label), "Awaiting connection");
+    set_label_center(await_connection_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2});
+    set_label_size(await_connection_label, LABEL_TEST_SIZE);
+    update_label(await_connection_label);
+
+    /////////////////////
+
+    failed_connecting_label = add_empty_label();
+    sprintf(get_label_buffer(failed_connecting_label), "Failed to connect to a server");
+    set_label_center(failed_connecting_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 - 150});
+    set_label_size(failed_connecting_label, LABEL_TEST_SIZE);
+    update_label(failed_connecting_label);
+
+    connecting_title_label = add_empty_label();
+    sprintf(get_label_buffer(connecting_title_label), "Enter ip address");
+    set_label_center(connecting_title_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 - 50});
+    set_label_size(connecting_title_label, LABEL_TEST_SIZE);
+    update_label(connecting_title_label);
+
+    ip_address_label = add_empty_label();
+    set_label_center(ip_address_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() / 2 + 50});
+    set_label_size(ip_address_label, LABEL_TEST_SIZE);
+    set_label_edit_callback(ip_address_label, &ip_address_label_edit_callback);
+    update_label(ip_address_label);
+
+    /////////////////////
+
+    win_label = add_empty_label();
+    sprintf(get_label_buffer(win_label), "You won!");
+    set_label_center(win_label, (Vector2){GetScreenWidth() / 2, 50});
+    set_label_size(win_label, LABEL_TEST_SIZE);
+    update_label(win_label);
+
+    lose_label = add_empty_label();
+    sprintf(get_label_buffer(lose_label), "You lost!");
+    set_label_center(lose_label, (Vector2){GetScreenWidth() / 2, 50});
+    set_label_size(lose_label, LABEL_TEST_SIZE);
+    update_label(lose_label);
+} 
+
 int main(void) {
+    SetTraceLogLevel(LOG_DEBUG);
+
+    NBN_UDP_Register(); // Register the UDP driver
+
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);    // Window configuration flags
-    InitWindow(INIT_SCREEN_WIDTH, INIT_SCREEN_HEIGHT, "infiniti tic-tac-toe");
+    InitWindow(INIT_SCREEN_WIDTH, INIT_SCREEN_HEIGHT, "infinite tic-tac-toe");
     SetTargetFPS(60);
+
+    setup_labels();
+    set_game_state(GAME_START);
 
     while (!WindowShouldClose()) 
     {
+        process_networking();
         process_inputs();
 
         BeginDrawing();
