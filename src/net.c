@@ -11,7 +11,6 @@ static NetOnDisonnect net_on_disconnect = NULL;
 static NetOnMessage net_on_message = NULL;
 
 void reset_server(void) {
-    fprintf(stderr, "reset_server\n");
     client_handle = 0;
     NBN_GameServer_Stop();
 }
@@ -39,6 +38,11 @@ bool init_server(NetOnConnect on_connect, NetOnDisonnect on_disconnect, NetOnMes
             (NBN_MessageBuilder)MessageGameEnd_Create,
             (NBN_MessageDestructor)MessageGameEnd_Destroy,
             (NBN_MessageSerializer)MessageGameEnd_Serialize);
+    NBN_GameServer_RegisterMessage(
+            MESSAGE_GAME_RESTART,
+            (NBN_MessageBuilder)MessageGameRestart_Create,
+            (NBN_MessageDestructor)MessageGameRestart_Destroy,
+            (NBN_MessageSerializer)MessageGameRestart_Serialize);
 
     return true;
 }
@@ -63,6 +67,11 @@ bool init_client(const char* p_ip, NetOnConnect on_connect, NetOnDisonnect on_di
             (NBN_MessageBuilder)MessageGameEnd_Create,
             (NBN_MessageDestructor)MessageGameEnd_Destroy,
             (NBN_MessageSerializer)MessageGameEnd_Serialize);
+    NBN_GameClient_RegisterMessage(
+            MESSAGE_GAME_RESTART,
+            (NBN_MessageBuilder)MessageGameRestart_Create,
+            (NBN_MessageDestructor)MessageGameRestart_Destroy,
+            (NBN_MessageSerializer)MessageGameRestart_Serialize);
 
     return true;
 }
@@ -85,8 +94,8 @@ void process_server_messages(void) {
                 client_handle = NBN_GameServer_GetIncomingConnection();
                 
                 uint8_t data[32];
-                net_on_connect(data, sizeof(data) / sizeof(data[0]));
-                NBN_GameServer_AcceptIncomingConnectionWithData(data, sizeof(data));
+                unsigned int size = net_on_connect(data, sizeof(data));
+                NBN_GameServer_AcceptIncomingConnectionWithData(data, size);
                 break;
             }
             case NBN_CLIENT_DISCONNECTED:
@@ -117,7 +126,7 @@ void process_client_messages(void) {
             case NBN_CONNECTED: {
                 uint8_t data[32];
                 unsigned int data_len = NBN_GameClient_ReadServerData(data);
-                net_on_connect(data, data_len);
+                assert(data_len == net_on_connect(data, data_len));
                 break;
             }
 
@@ -155,13 +164,19 @@ void send_client_move(int x, int y) {
 }
 
 void send_server_game_end(Player player, MessageMove* winning_cells) {
-    fprintf(stderr, "send_server_game_end %u\n", client_handle);
     MessageGameEnd *msg = MessageGameEnd_Create();
 
     msg->player = player;
     memcpy(&msg->winning_cells[0], winning_cells, WINNING_STROKE_SIZE * sizeof(MessageMove));
 
     NBN_GameServer_SendReliableMessageTo(client_handle, MESSAGE_GAME_END, msg);
+}
+void send_server_game_restart(Player player) {
+    MessageGameRestart *msg = MessageGameRestart_Create();
+
+    msg->player = player;
+
+    NBN_GameServer_SendReliableMessageTo(client_handle, MESSAGE_GAME_RESTART, msg);
 }
 
 MessageMove *MessageMove_Create(void) {
@@ -189,6 +204,18 @@ int MessageGameEnd_Serialize(MessageGameEnd *msg, NBN_Stream *stream) {
     for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
         MessageMove_Serialize(&msg->winning_cells[i], stream);
     }
+
+    return 0;
+}
+
+MessageGameRestart *MessageGameRestart_Create(void) {
+    return malloc(sizeof(MessageGameRestart));
+}
+void MessageGameRestart_Destroy(MessageGameRestart *msg) {
+    free(msg);
+}
+int MessageGameRestart_Serialize(MessageGameRestart *msg, NBN_Stream *stream) {
+    NBN_SerializeUInt(stream, msg->player, 0, PLAYER_TOTAL - 1);
 
     return 0;
 }

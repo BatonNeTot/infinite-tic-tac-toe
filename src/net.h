@@ -70,7 +70,7 @@ typedef struct tagMSG *LPMSG;
 
 #include "common.h"
 
-typedef void (*NetOnConnect)(uint8_t *p_buffer, unsigned int size);
+typedef unsigned int (*NetOnConnect)(uint8_t *p_buffer, unsigned int size);
 typedef void (*NetOnDisonnect)(void);
 typedef void (*NetOnMessage)(void);
 
@@ -91,6 +91,7 @@ void send_client_move(int x, int y);
 typedef enum {
     MESSAGE_MOVE_DONE,
     MESSAGE_GAME_END,
+    MESSAGE_GAME_RESTART,
 } MessageKind;
 
 typedef enum {
@@ -109,7 +110,12 @@ typedef struct {
     MessageMove winning_cells[WINNING_STROKE_SIZE];
 } MessageGameEnd;
 
+typedef struct {
+    Player player;
+} MessageGameRestart;
+
 void send_server_game_end(Player player, MessageMove* winning_cells);
+void send_server_game_restart(Player player);
 
 MessageMove *MessageMove_Create(void);
 void MessageMove_Destroy(MessageMove *);
@@ -118,5 +124,9 @@ int MessageMove_Serialize(MessageMove *, NBN_Stream *);
 MessageGameEnd *MessageGameEnd_Create(void);
 void MessageGameEnd_Destroy(MessageGameEnd *);
 int MessageGameEnd_Serialize(MessageGameEnd *, NBN_Stream *);
+
+MessageGameRestart *MessageGameRestart_Create(void);
+void MessageGameRestart_Destroy(MessageGameRestart *);
+int MessageGameRestart_Serialize(MessageGameRestart *, NBN_Stream *);
 
 #endif // INFINITE_NET_H

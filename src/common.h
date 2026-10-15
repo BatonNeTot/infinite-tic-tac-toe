@@ -29,7 +29,7 @@ do {\
 
 #define WINNING_STROKE_SIZE 5
 
-#define CELL_SIZE 125
+#define CELL_SIZE 75
 
 #define STROKE_WIDTH 5
 
