@@ -32,6 +32,14 @@ typedef struct {
     ARRAY_TYPE(Row) negative;
 } Board;
 
+typedef struct {
+    int x;
+    int y;
+} Cell;
+
+Cell highlighted_cells[16];
+int highlighted_cells_count = 0;
+
 typedef enum {
     GAME_START,
     GAME_AWAITING_CONNECTION,
@@ -202,11 +210,66 @@ Vector2 get_coords_from_mouse() {
 
 ///////////////////////////////////////////////////////
 
-void draw_circle_raw(Vector2 view_coords, float scale) {
+void draw_highlights(void) {
+    for (int i = 0; i < highlighted_cells_count; ++i) {
+        Vector2 view_coords = from_world_to_view(get_world_point_from_coords(
+            (Vector2){ highlighted_cells[i].x, highlighted_cells[i].y }));
+        DrawRectangleV(
+            (Vector2){ view_coords.x - scaled_cell_width(view_scaling) / 2, view_coords.y - scaled_cell_width(view_scaling) / 2 },
+            (Vector2){ scaled_cell_width(view_scaling), scaled_cell_width(view_scaling) },
+            HIGHLIGHT_COLOR
+        );
+    }
+}
+
+bool is_highlighted(int x, int y) {
+    for (int i = 0; i < highlighted_cells_count; ++i) {
+        if (highlighted_cells[i].x == x && highlighted_cells[i].y == y) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void add_highlight(int x, int y) {
+    highlighted_cells[highlighted_cells_count].x = x;
+    highlighted_cells[highlighted_cells_count].y = y;
+    ++highlighted_cells_count;
+
+    Vector2 world_view_max = {
+        view_center.x + world_view_width() / 2 - scaled_cell_width(view_scaling) / 2, 
+        view_center.y + world_view_height() / 2 - scaled_cell_width(view_scaling) / 2
+    };
+    Vector2 world_view_min = {
+        view_center.x - world_view_width() / 2 + scaled_cell_width(view_scaling) / 2, 
+        view_center.y - world_view_height() / 2 + scaled_cell_width(view_scaling) / 2
+    };
+    Vector2 world_point = get_world_point_from_coords((Vector2){ x, y });
+
+    if (world_point.x > world_view_max.x) {
+        view_center.x += world_point.x - world_view_max.x;
+    } else if (world_point.x < world_view_min.x) {
+        view_center.x += world_point.x - world_view_min.x;
+    }
+    
+    if (world_point.y > world_view_max.y) {
+        view_center.y += world_point.y - world_view_max.y;
+    } else if (world_point.y < world_view_min.y) {
+        view_center.y += world_point.y - world_view_min.y;
+    }
+}
+
+void clear_highlights() {
+    highlighted_cells_count = 0;
+}
+
+void draw_circle_raw(Vector2 view_coords, bool highlighted, float scale) {
     Vector2 center = view_coords;
     int radius = scaled_cell_width(scale) / 2 - scaled_stroke_width(scale) * 2.5f;
     DrawCircleV(center, radius, RED); 
-    DrawCircleV(center, radius - scaled_stroke_width(scale), BACKGROUND_COLOR); 
+    DrawCircleV(center, radius - scaled_stroke_width(scale), 
+        highlighted ? HIGHLIGHT_COLOR : BACKGROUND_COLOR); 
 }
 
 void draw_cross_raw(Vector2 view_coords, float scale) {
@@ -223,7 +286,7 @@ void draw_cross_raw(Vector2 view_coords, float scale) {
 }
 
 void draw_circle(Vector2 coords) {
-    draw_circle_raw(from_world_to_view(get_world_point_from_coords(coords)), view_scaling);
+    draw_circle_raw(from_world_to_view(get_world_point_from_coords(coords)), is_highlighted((int)coords.x, (int)coords.y), view_scaling);
 }
 
 void draw_cross(Vector2 coords) {
@@ -310,7 +373,7 @@ void draw_move_hint() {
     switch (game_state) {
         case GAME_RUNNING_SERVER:
             draw_circle_raw(
-                (Vector2){GetScreenWidth() - scaled_cell_width(scale) / 2, GetScreenHeight() - scaled_cell_width(scale) / 2}, scale);
+                (Vector2){GetScreenWidth() - scaled_cell_width(scale) / 2, GetScreenHeight() - scaled_cell_width(scale) / 2}, false, scale);
             break;
         case GAME_RUNNING_CLIENT:
             draw_cross_raw(
@@ -354,6 +417,7 @@ void draw_menu(void) {
 void process_drawings(void) {
     ClearBackground(WHITE);
 
+    draw_highlights();
     draw_grid();
     draw_board();
     draw_move_hint();
@@ -440,6 +504,7 @@ static void set_game_state(GameState state) {
         case GAME_FINISHED_SERVER_LOSE:
         case GAME_FINISHED_CLIENT_LOSE:
             reset_board();
+            clear_highlights();
             break;
         default:
             break;
@@ -481,6 +546,10 @@ static bool check_winning_conditions(Vector2 origin) {
         }
         if (found_win_stroke) {
             send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            clear_highlights();
+            for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+                add_highlight(cells[i].x, cells[i].y);
+            }
             set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
             return true;
         }
@@ -496,6 +565,9 @@ static bool check_winning_conditions(Vector2 origin) {
         }
         if (found_win_stroke) {
             send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+                add_highlight(cells[i].x, cells[i].y);
+            }
             set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
             return true;
         }
@@ -511,6 +583,9 @@ static bool check_winning_conditions(Vector2 origin) {
         }
         if (found_win_stroke) {
             send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+                add_highlight(cells[i].x, cells[i].y);
+            }
             set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
             return true;
         }
@@ -526,6 +601,9 @@ static bool check_winning_conditions(Vector2 origin) {
         }
         if (found_win_stroke) {
             send_server_game_end(target_state == CELL_SERVER ? PLAYER_SERVER : PLAYER_CLIENT, &cells[0]);
+            for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+                add_highlight(cells[i].x, cells[i].y);
+            }
             set_game_state(target_state == CELL_SERVER ? GAME_FINISHED_SERVER_WIN : GAME_FINISHED_SERVER_LOSE);
             return true;
         }
@@ -565,6 +643,8 @@ static void server_on_message() {
             assert(game_state == GAME_RUNNING_SERVER_AWAIT);
             MessageMove* msg = msg_info.data;
             set_cell_state(msg->x, msg->y, CELL_CLIENT);
+            clear_highlights();
+            add_highlight(msg->x, msg->y);
             set_game_state(GAME_RUNNING_SERVER);
             check_winning_conditions((Vector2){ msg->x, msg->y});
             break;
@@ -610,12 +690,19 @@ static void client_on_message() {
             assert(game_state == GAME_RUNNING_CLIENT_AWAIT);
             MessageMove* msg = msg_info.data;
             set_cell_state(msg->x, msg->y, CELL_SERVER);
+            clear_highlights();
+            add_highlight(msg->x, msg->y);
             set_game_state(GAME_RUNNING_CLIENT);
             break;
         }
         case MESSAGE_GAME_END: {
             assert(game_state == GAME_RUNNING_CLIENT_AWAIT);
             MessageGameEnd* msg = msg_info.data;
+            clear_highlights();
+            for (int i = 0; i < WINNING_STROKE_SIZE; ++i) {
+                set_cell_state(msg->winning_cells[i].x, msg->winning_cells[i].y, msg->player == PLAYER_SERVER ? CELL_SERVER : CELL_CLIENT);
+                add_highlight(msg->winning_cells[i].x, msg->winning_cells[i].y);
+            }
             set_game_state(msg->player == PLAYER_CLIENT ? GAME_FINISHED_CLIENT_WIN : GAME_FINISHED_CLIENT_LOSE);
             break;
         }
@@ -719,10 +806,14 @@ void process_inputs(void) {
         if (game_state == GAME_RUNNING_SERVER && set_cell_state((int)coords.x, (int)coords.y, CELL_SERVER)) {
             if (!check_winning_conditions(coords)) {
                 send_server_move((int)coords.x, (int)coords.y);
+                clear_highlights();
+                add_highlight((int)coords.x, (int)coords.y);
                 set_game_state(GAME_RUNNING_SERVER_AWAIT);
             }
         } else if (game_state == GAME_RUNNING_CLIENT && set_cell_state((int)coords.x, (int)coords.y, CELL_CLIENT)) {
             send_client_move((int)coords.x, (int)coords.y);
+            clear_highlights();
+            add_highlight((int)coords.x, (int)coords.y);
             set_game_state(GAME_RUNNING_CLIENT_AWAIT);
         }
     }
@@ -849,6 +940,8 @@ static void update_labels_positions(void) {
 
     set_label_center(restart_label, (Vector2){GetScreenWidth() / 2, GetScreenHeight() - 50});
     update_label(restart_label);
+
+    update_labels_popups();
 } 
 
 int main(void) {
