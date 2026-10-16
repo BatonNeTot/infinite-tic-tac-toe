@@ -126,7 +126,8 @@ void process_client_messages(void) {
             case NBN_CONNECTED: {
                 uint8_t data[32];
                 unsigned int data_len = NBN_GameClient_ReadServerData(data);
-                assert(data_len == net_on_connect(data, data_len));
+                unsigned int read_data_len = net_on_connect(data, data_len);
+                assert(data_len == read_data_len);
                 break;
             }
 
